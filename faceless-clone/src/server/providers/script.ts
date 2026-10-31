@@ -1,4 +1,5 @@
 import type { NicheProfile } from "../../lib/niches";
+import { scriptFromPrompt, type PromptDraft } from "../../lib/promptScript";
 import { extractJson, generatedScriptSchema, normalizeScriptShape, type GeneratedScript } from "../../lib/scriptSchema";
 import { countWords, sceneCount, wordRange } from "../../lib/utils";
 import { scriptSystemPrompt } from "../pipeline/prompts";
@@ -446,6 +447,63 @@ export async function rewriteImagePrompt(prompt: string): Promise<string> {
     `Make this visual less graphic, keep the story beat:\n${prompt}`,
   );
   return text.trim().replace(/^["']|["']$/g, "") || prompt;
+}
+
+const PROMPT_WRITER = `Return JSON only, no markdown:
+{"title":"max 70 chars","scenes":[{"narration":"one short spoken sentence","search":"3 photo words"}]}
+Write 6 scenes explaining the user's topic in plain speech, about 80 words total.
+The first sentence is at most 12 words.
+Each search is a real thing a camera can photograph.
+If the user already wrote the sentences, keep their facts and do not add new ones.`;
+
+async function promptWriter(prompt: string): Promise<string> {
+  let lastError = "The writer was unavailable.";
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const response = await fetch("https://text.pollinations.ai/openai", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "openai",
+        json: true,
+        reasoning_effort: "low",
+        max_tokens: 900,
+        messages: [
+          { role: "system", content: PROMPT_WRITER },
+          { role: "user", content: prompt },
+        ],
+      }),
+      signal: AbortSignal.timeout(40_000),
+    });
+    if (response.status === 402 && attempt === 0) {
+      const detail = await response.text();
+      const wait = Number(/retry after (\d+)/i.exec(detail)?.[1] ?? 20);
+      await new Promise((resolve) => setTimeout(resolve, (Math.min(wait, 50) + 1) * 1000));
+      continue;
+    }
+    if (!response.ok) {
+      const detail = await response.text();
+      lastError = `The writer failed (${response.status}). ${detail.slice(0, 180)}`;
+      continue;
+    }
+    const body = (await response.json()) as { choices?: { message?: { content?: string } }[] };
+    const content = body.choices?.[0]?.message?.content ?? "";
+    if (!content.trim()) {
+      lastError = "The writer returned nothing.";
+      continue;
+    }
+    return content;
+  }
+  throw new Error(lastError);
+}
+
+export async function generatePromptScript(prompt: string): Promise<{ script: GeneratedScript; source: "model" | "local" }> {
+  try {
+    const text = await promptWriter(prompt);
+    const draft = extractJson(text) as PromptDraft;
+    return { script: scriptFromPrompt(prompt, draft), source: "model" };
+  } catch {
+    return { script: scriptFromPrompt(prompt), source: "local" };
+  }
 }
 
 export async function generateScript(input: BuiltinInput): Promise<GeneratedScript> {

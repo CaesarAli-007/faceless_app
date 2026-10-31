@@ -7,6 +7,7 @@ import { generationPlan, upcomingPublishSlots } from "./schedule";
 import { alignScenes, groupCaptions } from "./timing";
 import { buildBuiltinScript } from "../server/providers/script";
 import { nicheByKey } from "./niches";
+import { scriptFromPrompt } from "./promptScript";
 import { countWords } from "./utils";
 
 describe("script schema", () => {
@@ -50,6 +51,43 @@ describe("builtin scripts", () => {
       expect(countWords(script.scenes[0]!.narration)).toBeLessThanOrEqual(12);
       expect(script.scenes.length).toBeGreaterThanOrEqual(8);
     }
+  });
+});
+
+describe("prompt reels", () => {
+  it("speaks a written explanation instead of replacing it", () => {
+    const prompt =
+      "Black holes form when a massive star runs out of fuel. The core collapses under its own weight. Gravity becomes so strong that even light cannot escape. The edge of that darkness is called the event horizon.";
+    const script = scriptFromPrompt(prompt);
+    const spoken = script.scenes.map((scene) => scene.narration).join(" ");
+    expect(spoken.toLowerCase()).toContain("event horizon");
+    expect(spoken.toLowerCase()).not.toContain("the line to keep");
+    expect(script.scenes.length).toBeGreaterThanOrEqual(4);
+    expect(script.scenes.every((scene) => scene.imagePrompt.length >= 10)).toBe(true);
+  });
+
+  it("turns a short brief into a speakable reel", () => {
+    const script = scriptFromPrompt("Why leaves change color in autumn");
+    expect(generatedScriptSchema.safeParse(script).success).toBe(true);
+    expect(script.scenes.length).toBeGreaterThanOrEqual(4);
+    expect(countWords(script.scenes[0]!.narration)).toBeLessThanOrEqual(12);
+    expect(script.scenes[0]!.narration.toLowerCase()).toContain("leaves");
+  });
+
+  it("prefers a drafted voiceover when it is long enough", () => {
+    const script = scriptFromPrompt("How glass is made", {
+      title: "How glass is made",
+      scenes: [
+        { narration: "Glass starts as sand.", search: "sand dune closeup" },
+        { narration: "The sand is heated until it melts.", search: "molten glass furnace" },
+        { narration: "Workers gather a glowing blob on a pipe.", search: "glassblower furnace" },
+        { narration: "A breath inflates it into a hollow form.", search: "glassblowing bubble" },
+        { narration: "The shape cools into something you can hold.", search: "clear glass bottle" },
+      ],
+    });
+    expect(script.title).toBe("How glass is made");
+    expect(script.scenes.map((scene) => scene.narration).join(" ")).toContain("glowing blob");
+    expect(script.scenes[1]?.imagePrompt.toLowerCase()).toContain("molten glass");
   });
 });
 

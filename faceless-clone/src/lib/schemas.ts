@@ -95,3 +95,7 @@ export const bulkVideoSchema = z.object({
 export const settingPatchSchema = z.object({
   timezone: z.string().min(1).optional(),
 });
+
+export const reelPromptSchema = z.object({
+  prompt: z.string().trim().min(8, "Describe the reel in at least a few words.").max(2000, "Keep the prompt under 2000 characters."),
+});

@@ -13,7 +13,7 @@ export const generatedScriptSchema = z.object({
         imagePrompt: z.string().min(10),
       }),
     )
-    .min(8)
+    .min(4)
     .max(12),
 });
 

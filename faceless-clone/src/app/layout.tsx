@@ -9,8 +9,8 @@ import { Providers } from "@/components/providers";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Faceless Reels",
-  description: "Create viral faceless videos on auto-pilot, locally.",
+  title: "Reels",
+  description: "Describe a short reel and download the video.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

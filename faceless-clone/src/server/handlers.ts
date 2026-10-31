@@ -7,7 +7,7 @@ import { ART_STYLES, artStyleByKey } from "../lib/artStyles";
 import { defaultCaptionStyle, type CaptionStyle } from "../lib/caption";
 import { EFFECTS } from "../lib/effects";
 import { NICHES, nicheByKey } from "../lib/niches";
-import { bulkVideoSchema, generateCountSchema, rerenderSchema, seriesWriteSchema, settingPatchSchema, videoPatchSchema } from "../lib/schemas";
+import { bulkVideoSchema, generateCountSchema, reelPromptSchema, rerenderSchema, seriesWriteSchema, settingPatchSchema, videoPatchSchema } from "../lib/schemas";
 import type { GeneratedScript } from "../lib/scriptSchema";
 import { upcomingPublishSlots } from "../lib/schedule";
 import { PREVIEW_SENTENCE } from "../lib/voiceCatalog";
@@ -216,6 +216,7 @@ function presentVideo(video: {
   status: string;
   progress: number;
   topic: string | null;
+  prompt?: string | null;
   title: string | null;
   description: string | null;
   hashtags: string;
@@ -236,6 +237,7 @@ function presentVideo(video: {
     ...video,
     filePath: undefined,
     thumbPath: undefined,
+    prompt: video.prompt ?? null,
     hasFile: Boolean(video.filePath),
     hasThumb: Boolean(video.thumbPath),
     hashtags: parseJson<string[]>(video.hashtags, []),
@@ -394,11 +396,69 @@ export async function bulkVideos(req: Request) {
   return json({ ok: true, count: parsed.data.ids.length });
 }
 
+function downloadName(title: string | null) {
+  const base = (title || "reel").replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "-").slice(0, 60);
+  return `${base || "reel"}.mp4`;
+}
+
 export async function videoFile(req: Request, id: string) {
   await ready();
   const video = await prisma.video.findUnique({ where: { id } });
   if (!video?.filePath) return error("No video file yet.", 404);
-  return streamRange(req, safeProjectFile(video.filePath), "video/mp4");
+  const download = new URL(req.url).searchParams.has("download");
+  const disposition = download ? `attachment; filename="${downloadName(video.title)}"` : "inline";
+  return streamRange(req, safeProjectFile(video.filePath), "video/mp4", disposition);
+}
+
+export async function createReel(req: Request) {
+  await ready();
+  const parsed = parseBody(reelPromptSchema, await readJson(req));
+  if (!parsed.ok) return error(parsed.error);
+  const series = await reelSeries();
+  const video = await prisma.video.create({
+    data: {
+      seriesId: series.id,
+      status: "PENDING",
+      prompt: parsed.data.prompt,
+      topic: parsed.data.prompt.slice(0, 180),
+    },
+  });
+  await enqueue("GENERATE_VIDEO", { videoId: video.id });
+  const full = await prisma.video.findUnique({
+    where: { id: video.id },
+    include: { series: { select: { name: true, autoApprove: true, autoPublish: true } } },
+  });
+  return json(presentVideo(full!), 201);
+}
+
+async function reelSeries() {
+  const existing = await prisma.series.findFirst({ where: { name: "Prompt reels", nicheKey: "custom" } });
+  if (existing) return existing;
+  const voice = (await prisma.voice.findUnique({ where: { id: "jonah" } })) ?? (await prisma.voice.findFirst({ where: { language: "en" } }));
+  if (!voice) throw new Error("No voice is installed. Run npm run db:setup.");
+  const music = await prisma.musicTrack.findUnique({ where: { key: "quiet-before-storm" } });
+  return prisma.series.create({
+    data: {
+      name: "Prompt reels",
+      nicheKey: "custom",
+      customNichePrompt: "One short reel from a single prompt",
+      language: "en",
+      voiceId: voice.id,
+      musicTrackIds: JSON.stringify(music ? [music.id] : []),
+      artStyleKey: "realism",
+      captionStyle: JSON.stringify(defaultCaptionStyle()),
+      effects: "[]",
+      durationMinSec: 20,
+      durationMaxSec: 70,
+      timezone: "UTC",
+      publishTimes: "[]",
+      publishDays: "[]",
+      leadHours: 0,
+      autoApprove: true,
+      autoPublish: false,
+      status: "PAUSED",
+    },
+  });
 }
 
 export async function videoThumb(id: string) {
@@ -410,13 +470,18 @@ export async function videoThumb(id: string) {
   return new Response(data, { headers: { "Content-Type": "image/jpeg", "Cache-Control": "no-cache" } });
 }
 
-function streamRange(req: Request, abs: string, contentType: string) {
+function streamRange(req: Request, abs: string, contentType: string, disposition = "inline") {
   return fs.stat(abs).then((stat) => {
     const size = stat.size;
     const range = req.headers.get("range");
     if (!range) {
       return new Response(Readable.toWeb(createReadStream(abs)) as ReadableStream, {
-        headers: { "Content-Type": contentType, "Content-Length": String(size), "Accept-Ranges": "bytes" },
+        headers: {
+          "Content-Type": contentType,
+          "Content-Length": String(size),
+          "Accept-Ranges": "bytes",
+          "Content-Disposition": disposition,
+        },
       });
     }
     const match = /bytes=(\d+)-(\d*)/.exec(range);

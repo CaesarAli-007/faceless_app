@@ -217,8 +217,100 @@ async function openai(input: ImageRequest) {
   throw new Error("OpenAI returned no image.");
 }
 
+const COMMONS_UA = "FacelessReels/1.0 (personal localhost studio)";
+const COMMONS_SKIP = /\b(icon|logo|flag|map|diagram|chart|emblem|seal|symbol|locator|svg|gif|banner|poster|screenshot|pictogram|notation)\b|coat of arms|sheet music|coat_of_arms/i;
+
+function photoQuery(prompt: string) {
+  return prompt
+    .replace(/\bphotograph\b/gi, " ")
+    .replace(/[^\p{L}\p{N}\s-]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80);
+}
+
+function queryVariants(prompt: string) {
+  const query = photoQuery(prompt);
+  const words = query.split(" ").filter(Boolean);
+  const variants = [query];
+  if (words.length > 3) variants.push(words.slice(0, 3).join(" "));
+  if (words.length > 4) variants.push(words.slice(-3).join(" "));
+  return [...new Set(variants.filter((item) => item.length >= 3))];
+}
+
+async function commonsSearch(query: string) {
+  const url = new URL("https://commons.wikimedia.org/w/api.php");
+  url.searchParams.set("action", "query");
+  url.searchParams.set("format", "json");
+  url.searchParams.set("generator", "search");
+  url.searchParams.set("gsrsearch", `${query} filetype:bitmap`);
+  url.searchParams.set("gsrnamespace", "6");
+  url.searchParams.set("gsrlimit", "12");
+  url.searchParams.set("prop", "imageinfo");
+  url.searchParams.set("iiprop", "url|mime|size");
+  url.searchParams.set("iiurlwidth", "1200");
+  const response = await fetch(url, {
+    headers: { "User-Agent": COMMONS_UA, Accept: "application/json" },
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (!response.ok) throw new Error(`Photo search failed (${response.status}).`);
+  const body = (await response.json()) as {
+    query?: {
+      pages?: Record<
+        string,
+        { title?: string; imageinfo?: { mime?: string; thumburl?: string; url?: string; thumbwidth?: number; width?: number }[] }
+      >;
+    };
+  };
+  const pages = Object.values(body.query?.pages ?? {});
+  const urls: string[] = [];
+  for (const page of pages) {
+    if (COMMONS_SKIP.test(page.title || "")) continue;
+    const info = page.imageinfo?.[0];
+    if (!info?.mime || !/^image\/(jpeg|png|webp)$/.test(info.mime)) continue;
+    const thumb = info.thumburl && (info.thumbwidth ?? 0) >= 640 ? info.thumburl : info.url;
+    const wide = (info.width ?? info.thumbwidth ?? 0) >= 480;
+    if (thumb && wide) urls.push(thumb);
+  }
+  return urls;
+}
+
+async function commons(input: ImageRequest & { scene?: number }) {
+  const variants = queryVariants(input.prompt);
+  let lastError = "No matching photo.";
+  for (const query of variants) {
+    let urls: string[] = [];
+    try {
+      urls = await commonsSearch(query);
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : lastError;
+      continue;
+    }
+    if (!urls.length) continue;
+    const offset = Math.abs((input.seed ?? 0) + (input.scene ?? 0)) % urls.length;
+    const ordered = urls.slice(offset).concat(urls.slice(0, offset));
+    for (const candidate of ordered.slice(0, 4)) {
+      try {
+        const response = await fetch(candidate, {
+          headers: { "User-Agent": COMMONS_UA },
+          signal: AbortSignal.timeout(25_000),
+        });
+        if (!response.ok) continue;
+        const raw = Buffer.from(await response.arrayBuffer());
+        const meta = await sharp(raw).metadata();
+        if (!meta.width || !meta.height || meta.width < 320 || meta.height < 320) continue;
+        return sharp(raw).rotate().resize(1080, 1920, { fit: "cover", position: "attention" }).png().toBuffer();
+      } catch {
+        continue;
+      }
+    }
+  }
+  throw new Error(`No photo for "${photoQuery(input.prompt).slice(0, 60)}". ${lastError}`);
+}
+
 export async function generateImage(input: ImageRequest & { styleKey?: string; scene?: number }) {
   const provider = (process.env.IMAGE_PROVIDER || "comfyui").toLowerCase();
+  if (provider === "commons") return commons(input);
   if (provider === "placeholder") {
     const style = artStyleByKey(input.styleKey || "realism");
     return placeholderPng({

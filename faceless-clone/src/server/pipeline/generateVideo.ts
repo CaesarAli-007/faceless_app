@@ -15,7 +15,7 @@ import { videoLog } from "../log";
 import { changeTempo, loudnormToMp3, probeDuration } from "../media";
 import { ensureDir, fileExists, projectRoot, safeProjectFile, videoFolder } from "../paths";
 import { generateImage, imageSizeFor, placeholderForStyle, SafetyRejection } from "../providers/image";
-import { generateScript, rewriteImagePrompt } from "../providers/script";
+import { generatePromptScript, generateScript, rewriteImagePrompt } from "../providers/script";
 import { synthesizeSpeech } from "../providers/tts";
 import type { KenBurns, ReelProps } from "../../../remotion/types";
 import { renderReel, stagePublicAsset } from "./renderReel";
@@ -123,6 +123,26 @@ export async function generateVideo(videoId: string, from?: "script" | "voice" |
 async function ensureScript(videoId: string, scriptPath: string) {
   if (await fileExists(scriptPath)) return JSON.parse(await fs.readFile(scriptPath, "utf8")) as GeneratedScript;
   const video = await load(videoId);
+  if (video.prompt?.trim()) {
+    await videoLog(videoId, "Writing the voiceover from your prompt.");
+    const written = await generatePromptScript(video.prompt.trim());
+    if (written.source === "local") await videoLog(videoId, "The writer was busy, so the reel stays close to your own words.");
+    const script = written.script;
+    await fs.writeFile(scriptPath, JSON.stringify(script, null, 2));
+    await prisma.video.update({
+      where: { id: videoId },
+      data: {
+        topic: script.topic,
+        title: script.title,
+        description: script.description,
+        hashtags: JSON.stringify(script.hashtags),
+        scriptJson: JSON.stringify(script),
+        progress: 15,
+      },
+    });
+    await videoLog(videoId, `Script ready: ${script.title}`);
+    return script;
+  }
   const niche = nicheByKey(video.series.nicheKey);
   const past = await prisma.video.findMany({
     where: { seriesId: video.seriesId, NOT: { id: videoId }, topic: { not: null } },
@@ -226,6 +246,7 @@ async function ensureImages(video: Loaded, script: GeneratedScript, folder: stri
   const niche = nicheByKey(video.series.nicheKey);
   const size = imageSizeFor();
   const seed = hashSeed(video.id);
+  const provider = (process.env.IMAGE_PROVIDER || "comfyui").toLowerCase();
   const limit = Math.max(1, Number(process.env.IMAGE_CONCURRENCY || 2));
   let finished = 0;
   await mapPool(script.scenes, limit, async (scene, index) => {
@@ -234,12 +255,14 @@ async function ensureImages(video: Loaded, script: GeneratedScript, folder: stri
       finished += 1;
       return;
     }
-    let prompt = assembleImagePrompt({
-      imagePrompt: scene.imagePrompt,
-      styleBible: script.styleBible,
-      artSuffix: style.promptSuffix,
-      nicheAddendum: niche.imageStyleAddendum,
-    });
+    let prompt = provider === "commons"
+      ? scene.imagePrompt
+      : assembleImagePrompt({
+          imagePrompt: scene.imagePrompt,
+          styleBible: script.styleBible,
+          artSuffix: style.promptSuffix,
+          nicheAddendum: niche.imageStyleAddendum,
+        });
     let lastError: Error | null = null;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
@@ -269,6 +292,8 @@ async function ensureImages(video: Loaded, script: GeneratedScript, folder: stri
       if (index > 0 && (await fileExists(previous))) {
         await fs.copyFile(previous, target);
         await videoLog(video.id, `Scene ${index + 1} reused the previous image after ${lastError?.message ?? "a failure"}.`);
+      } else if (provider === "commons") {
+        throw lastError ?? new Error(`Scene ${index + 1} has no photo.`);
       } else {
         await fs.writeFile(target, await placeholderForStyle(style.key));
         await videoLog(video.id, `Scene ${index + 1} used a stand-in image after ${lastError?.message ?? "a failure"}.`);
