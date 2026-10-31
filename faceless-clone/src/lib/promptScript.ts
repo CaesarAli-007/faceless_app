@@ -1,9 +1,12 @@
 import { generatedScriptSchema, type GeneratedScript } from "./scriptSchema";
 import { countWords } from "./utils";
 
+export const MIN_REEL_WORDS = 155;
+
 export type PromptDraft = {
   title?: string;
-  scenes?: { narration?: string; search?: string }[];
+  character?: string;
+  scenes?: { narration?: string; search?: string; action?: string }[];
 };
 
 const STOP = new Set(
@@ -82,7 +85,7 @@ function chunkNarration(text: string) {
     .map(tidy)
     .filter(Boolean);
   let parts = (sentences.length ? sentences : [tidy(text)]).flatMap(splitLong);
-  while (parts.length > 10) {
+  while (parts.length > 12) {
     const next = parts.pop()!;
     const prev = parts.pop()!;
     parts.push(`${prev.replace(/[.?!]+$/g, "")}. ${next}`);
@@ -131,7 +134,7 @@ function draftScenes(draft: PromptDraft | undefined) {
   const scenes = (draft?.scenes ?? [])
     .map((scene) => ({
       narration: tidy(scene.narration ?? ""),
-      search: tidy(scene.search ?? ""),
+      search: tidy(scene.action || scene.search || ""),
     }))
     .filter((scene) => countWords(scene.narration) > 0);
   const words = countWords(scenes.map((scene) => scene.narration).join(" "));
@@ -142,7 +145,7 @@ function draftScenes(draft: PromptDraft | undefined) {
     return spoken.map((narration) => ({ narration, search: scenes[0]?.search || "" }));
   }
   let parts = scenes.flatMap((scene) => splitLong(scene.narration).map((narration) => ({ narration, search: scene.search })));
-  while (parts.length > 10) {
+  while (parts.length > 12) {
     const next = parts.pop()!;
     const prev = parts.pop()!;
     parts.push({
@@ -162,11 +165,35 @@ function tagsFrom(text: string) {
   return unique.slice(0, 6);
 }
 
-function imagePromptFor(search: string, narration: string, topic: string) {
-  const query = tidy(search) || searchFromLine(narration, topic);
-  const phrase = query.length >= 8 ? query : searchFromLine(`${query} ${narration}`, topic);
-  const prompt = `${phrase} photograph`;
-  return prompt.length >= 10 ? prompt : "open landscape photograph";
+function imagePromptFor(search: string, narration: string, topic: string, character: string) {
+  const action = tidy(search) || searchFromLine(narration, topic);
+  const phrase = action.length >= 8 ? action : searchFromLine(`${action} ${narration}`, topic);
+  const who = character.trim() || `one friendly cartoon character explaining ${clipWords(topic, 6)}`;
+  const prompt = `${who}, ${phrase}, the same cartoon character, bold outlines, flat colors, full body, simple background, no text`;
+  return prompt.length >= 10 ? prompt : "one friendly cartoon character, full body, flat colors, no text";
+}
+
+function stretchToMinute(scenes: { narration: string; search: string }[], _topic: string) {
+  const next = scenes.map((scene) => ({ narration: speakable(scene.narration), search: scene.search }));
+  const words = () => countWords(next.map((scene) => scene.narration).join(" "));
+  const restate = (narration: string) => {
+    const bare = narration.replace(/[.?!]+$/g, "").replace(/^In other words, /i, "");
+    const lower = bare.charAt(0).toLowerCase() + bare.slice(1);
+    return speakable(`${bare}. In other words, ${lower}`);
+  };
+  for (let index = 1; index < next.length && words() < MIN_REEL_WORDS; index += 1) {
+    next[index] = { ...next[index]!, narration: restate(next[index]!.narration) };
+  }
+  const seeds = next.map((scene) => ({ ...scene }));
+  let beat = 0;
+  while (words() < MIN_REEL_WORDS && next.length < 12 && beat < 12) {
+    const source = seeds[beat % seeds.length]!;
+    const bare = source.narration.split(". In other words,")[0]!.replace(/[.?!]+$/g, "");
+    const lower = bare.charAt(0).toLowerCase() + bare.slice(1);
+    next.push({ narration: speakable(`Once more, ${lower}`), search: source.search });
+    beat += 1;
+  }
+  return next;
 }
 
 export function scriptFromPrompt(prompt: string, draft?: PromptDraft): GeneratedScript {
@@ -174,20 +201,24 @@ export function scriptFromPrompt(prompt: string, draft?: PromptDraft): Generated
   if (clean.length < 8) throw new Error("Describe the reel in at least a few words.");
   const fromDraft = draftScenes(draft);
   const spoken = chunkNarration(clean);
-  const scenes = fromDraft ?? (spoken.length >= 4 ? spoken.map((narration) => ({ narration, search: "" })) : explainBrief(clean));
+  const base = fromDraft ?? (spoken.length >= 4 ? spoken.map((narration) => ({ narration, search: "" })) : explainBrief(clean));
   const idea = stripLead(clean) || clean;
+  const character =
+    tidy(draft?.character ?? "").slice(0, 180) ||
+    `one friendly cartoon character with a simple costume that matches ${clipWords(idea, 6)}`;
+  const scenes = stretchToMinute(base, idea);
   const titleSource = tidy(draft?.title ?? "") || scenes[0]?.narration.replace(/[.?!]+$/g, "") || idea;
   const title = clip(titleSource, 80);
-  const description = clip(clean.length >= 10 ? clean : `${clean} A short reel.`, 240);
+  const description = clip(clean.length >= 10 ? clean : `${clean} A one minute reel.`, 240);
   const script: GeneratedScript = {
     topic: clip(idea, 140),
     title: title.length >= 3 ? title : clip(idea, 80),
     description,
     hashtags: tagsFrom(`${idea} ${scenes.map((scene) => scene.narration).join(" ")}`),
-    styleBible: "Real photographs of the objects and places in the narration. Natural light. No text, no logos, no watermarks.",
+    styleBible: `The same cartoon character in every scene: ${character}. Bold outlines, flat colors, full body, simple background. No photographs, no text, no logos.`,
     scenes: scenes.map((scene) => ({
       narration: scene.narration,
-      imagePrompt: imagePromptFor(scene.search, scene.narration, idea),
+      imagePrompt: imagePromptFor(scene.search, scene.narration, idea, character),
     })),
   };
   const parsed = generatedScriptSchema.safeParse(script);

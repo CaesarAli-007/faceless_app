@@ -450,11 +450,11 @@ export async function rewriteImagePrompt(prompt: string): Promise<string> {
 }
 
 const PROMPT_WRITER = `Return JSON only, no markdown:
-{"title":"max 70 chars","scenes":[{"narration":"one short spoken sentence","search":"3 photo words"}]}
-Write 6 scenes explaining the user's topic in plain speech, about 80 words total.
+{"title":"max 70 chars","character":"one cartoon character with colors and a costume tied to the topic","scenes":[{"narration":"one spoken sentence","action":"what that same character is doing"}]}
+Write 10 scenes and about 180 spoken words, enough to last at least 60 seconds aloud.
 The first sentence is at most 12 words.
-Each search is a real thing a camera can photograph.
-If the user already wrote the sentences, keep their facts and do not add new ones.`;
+Use the same character in every scene. Actions are cartoon moments, not photographs.
+If the user already wrote several sentences, keep their facts and do not invent new ones.`;
 
 async function promptWriter(prompt: string): Promise<string> {
   let lastError = "The writer was unavailable.";
@@ -466,7 +466,7 @@ async function promptWriter(prompt: string): Promise<string> {
         model: "openai",
         json: true,
         reasoning_effort: "low",
-        max_tokens: 900,
+        max_tokens: 1600,
         messages: [
           { role: "system", content: PROMPT_WRITER },
           { role: "user", content: prompt },

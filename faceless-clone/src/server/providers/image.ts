@@ -308,8 +308,63 @@ async function commons(input: ImageRequest & { scene?: number }) {
   throw new Error(`No photo for "${photoQuery(input.prompt).slice(0, 60)}". ${lastError}`);
 }
 
+function cartoonPrompt(prompt: string) {
+  const clean = prompt.replace(/\s+/g, " ").trim().slice(0, 420);
+  return `${clean}. One cartoon character only, bold outlines, flat colors, full body, centered, plain background, no text, no letters, no watermark, no photograph, no realism`;
+}
+
+async function cartoon(input: ImageRequest & { scene?: number }) {
+  const seed = Math.abs((input.seed ?? 1) + (input.scene ?? 0) * 17) % 1_000_000_000;
+  const prompt = cartoonPrompt(input.prompt);
+  let lastError = "The cartoon did not draw.";
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const url = new URL(`https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}`);
+      url.searchParams.set("width", "768");
+      url.searchParams.set("height", "1344");
+      url.searchParams.set("nologo", "true");
+      url.searchParams.set("model", "flux");
+      url.searchParams.set("seed", String(seed + attempt));
+      const response = await fetch(url, {
+        headers: { "User-Agent": "FacelessReels/1.0 (personal localhost studio)" },
+        signal: AbortSignal.timeout(60_000),
+      });
+      if (response.status === 402 || response.status === 503) {
+        const detail = await response.text();
+        const wait = Number(/retry after (\d+)/i.exec(detail)?.[1] ?? 8);
+        lastError = `Cartoon request failed (${response.status}).`;
+        await new Promise((resolve) => setTimeout(resolve, (Math.min(wait, 20) + 1) * 1000));
+        continue;
+      }
+      if (!response.ok) {
+        lastError = `Cartoon request failed (${response.status}).`;
+        await new Promise((resolve) => setTimeout(resolve, 800 * 2 ** attempt));
+        continue;
+      }
+      const raw = Buffer.from(await response.arrayBuffer());
+      if (raw.length < 8000 || (raw[0] !== 0xff && raw[0] !== 0x89)) {
+        lastError = "Cartoon response was not an image.";
+        continue;
+      }
+      const meta = await sharp(raw).metadata();
+      if (!meta.width || !meta.height) continue;
+      const height = Math.max(32, Math.round(meta.height * 0.9));
+      return sharp(raw)
+        .extract({ left: 0, top: 0, width: meta.width, height })
+        .resize(1080, 1920, { fit: "cover", position: "centre" })
+        .png()
+        .toBuffer();
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : lastError;
+      await new Promise((resolve) => setTimeout(resolve, 800 * 2 ** attempt));
+    }
+  }
+  throw new Error(lastError);
+}
+
 export async function generateImage(input: ImageRequest & { styleKey?: string; scene?: number }) {
   const provider = (process.env.IMAGE_PROVIDER || "comfyui").toLowerCase();
+  if (provider === "cartoon") return cartoon(input);
   if (provider === "commons") return commons(input);
   if (provider === "placeholder") {
     const style = artStyleByKey(input.styleKey || "realism");

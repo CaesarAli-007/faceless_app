@@ -28,7 +28,7 @@ const STAGE: Record<string, string> = {
   PENDING: "Waiting to start",
   SCRIPTING: "Writing the voiceover",
   VOICING: "Recording the voice",
-  IMAGING: "Choosing the pictures",
+  IMAGING: "Drawing the characters",
   CAPTIONING: "Timing the captions",
   RENDERING: "Rendering the video",
 };

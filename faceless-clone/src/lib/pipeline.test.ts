@@ -7,7 +7,7 @@ import { generationPlan, upcomingPublishSlots } from "./schedule";
 import { alignScenes, groupCaptions } from "./timing";
 import { buildBuiltinScript } from "../server/providers/script";
 import { nicheByKey } from "./niches";
-import { scriptFromPrompt } from "./promptScript";
+import { MIN_REEL_WORDS, scriptFromPrompt } from "./promptScript";
 import { countWords } from "./utils";
 
 describe("script schema", () => {
@@ -62,16 +62,19 @@ describe("prompt reels", () => {
     const spoken = script.scenes.map((scene) => scene.narration).join(" ");
     expect(spoken.toLowerCase()).toContain("event horizon");
     expect(spoken.toLowerCase()).not.toContain("the line to keep");
+    expect(countWords(spoken)).toBeGreaterThanOrEqual(MIN_REEL_WORDS);
     expect(script.scenes.length).toBeGreaterThanOrEqual(4);
-    expect(script.scenes.every((scene) => scene.imagePrompt.length >= 10)).toBe(true);
+    expect(script.scenes.every((scene) => /cartoon/i.test(scene.imagePrompt))).toBe(true);
   });
 
   it("turns a short brief into a speakable reel", () => {
     const script = scriptFromPrompt("Why leaves change color in autumn");
     expect(generatedScriptSchema.safeParse(script).success).toBe(true);
     expect(script.scenes.length).toBeGreaterThanOrEqual(4);
+    expect(countWords(script.scenes.map((scene) => scene.narration).join(" "))).toBeGreaterThanOrEqual(MIN_REEL_WORDS);
     expect(countWords(script.scenes[0]!.narration)).toBeLessThanOrEqual(12);
     expect(script.scenes[0]!.narration.toLowerCase()).toContain("leaves");
+    expect(script.scenes[0]!.imagePrompt.toLowerCase()).toContain("cartoon");
   });
 
   it("prefers a drafted voiceover when it is long enough", () => {
@@ -88,6 +91,7 @@ describe("prompt reels", () => {
     expect(script.title).toBe("How glass is made");
     expect(script.scenes.map((scene) => scene.narration).join(" ")).toContain("glowing blob");
     expect(script.scenes[1]?.imagePrompt.toLowerCase()).toContain("molten glass");
+    expect(script.scenes[1]?.imagePrompt.toLowerCase()).toContain("cartoon");
   });
 });
 

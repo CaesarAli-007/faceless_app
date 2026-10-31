@@ -198,7 +198,7 @@ async function ensureVoice(video: Loaded, script: GeneratedScript, voicePath: st
     await fs.copyFile(rough, voicePath);
   }
   let durationSec = await probeDuration(voicePath);
-  if (durationSec > video.series.durationMaxSec + 5) {
+  if (!video.prompt && durationSec > video.series.durationMaxSec + 5) {
     await videoLog(video.id, "Narration ran long. Speaking it slightly faster.");
     spoken = await synthesizeSpeech({
       text: narration,
@@ -216,7 +216,16 @@ async function ensureVoice(video: Loaded, script: GeneratedScript, voicePath: st
     }
     durationSec = await probeDuration(voicePath);
   }
-  if (durationSec > 90) {
+  if (video.prompt && durationSec < 60 && durationSec > 15) {
+    const tempo = Math.max(0.5, durationSec / 62);
+    const slowed = path.join(path.dirname(voicePath), "voice-slow.mp3");
+    await changeTempo(voicePath, slowed, tempo);
+    await fs.copyFile(slowed, voicePath);
+    words = words.map((word) => ({ ...word, startMs: word.startMs / tempo, endMs: word.endMs / tempo }));
+    durationSec = await probeDuration(voicePath);
+    await videoLog(video.id, `Narration was stretched so the reel reaches ${durationSec.toFixed(0)} seconds.`);
+  }
+  if (!video.prompt && durationSec > 90) {
     const tempo = durationSec / 88;
     const sped = path.join(path.dirname(voicePath), "voice-sped.mp3");
     await changeTempo(voicePath, sped, tempo);
@@ -247,7 +256,8 @@ async function ensureImages(video: Loaded, script: GeneratedScript, folder: stri
   const size = imageSizeFor();
   const seed = hashSeed(video.id);
   const provider = (process.env.IMAGE_PROVIDER || "comfyui").toLowerCase();
-  const limit = Math.max(1, Number(process.env.IMAGE_CONCURRENCY || 2));
+  const directPrompt = provider === "commons" || provider === "cartoon";
+  const limit = provider === "cartoon" ? 1 : Math.max(1, Number(process.env.IMAGE_CONCURRENCY || 2));
   let finished = 0;
   await mapPool(script.scenes, limit, async (scene, index) => {
     const target = path.join(folder, "images", `scene-${String(index + 1).padStart(2, "0")}.png`);
@@ -255,7 +265,7 @@ async function ensureImages(video: Loaded, script: GeneratedScript, folder: stri
       finished += 1;
       return;
     }
-    let prompt = provider === "commons"
+    let prompt = directPrompt
       ? scene.imagePrompt
       : assembleImagePrompt({
           imagePrompt: scene.imagePrompt,
@@ -292,8 +302,8 @@ async function ensureImages(video: Loaded, script: GeneratedScript, folder: stri
       if (index > 0 && (await fileExists(previous))) {
         await fs.copyFile(previous, target);
         await videoLog(video.id, `Scene ${index + 1} reused the previous image after ${lastError?.message ?? "a failure"}.`);
-      } else if (provider === "commons") {
-        throw lastError ?? new Error(`Scene ${index + 1} has no photo.`);
+      } else if (provider === "commons" || provider === "cartoon") {
+        throw lastError ?? new Error(`Scene ${index + 1} has no picture.`);
       } else {
         await fs.writeFile(target, await placeholderForStyle(style.key));
         await videoLog(video.id, `Scene ${index + 1} used a stand-in image after ${lastError?.message ?? "a failure"}.`);

@@ -26,7 +26,7 @@ const STAGE: Record<string, string> = {
   PENDING: "Waiting to start",
   SCRIPTING: "Writing the voiceover",
   VOICING: "Recording the voice",
-  IMAGING: "Choosing the pictures",
+  IMAGING: "Drawing the characters",
   CAPTIONING: "Timing the captions",
   RENDERING: "Rendering the video",
 };
@@ -76,7 +76,7 @@ export default function HomePage() {
           <div className="kicker">The prompt</div>
           <h1 className="display mt-2 text-5xl leading-none md:text-6xl">Explain the reel.</h1>
           <p className="mt-4 max-w-xl text-muted">
-            Write the idea, or paste the words you want spoken. You get a vertical video with pictures, a voiceover, and captions.
+            Write the idea, or paste the words you want spoken. You get a one-minute vertical video with a cartoon character, a voiceover, and captions.
           </p>
           <label className="mt-6 block">
             <span className="sr-only">Prompt</span>
