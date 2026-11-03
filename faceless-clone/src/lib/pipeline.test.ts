@@ -7,7 +7,8 @@ import { generationPlan, upcomingPublishSlots } from "./schedule";
 import { alignScenes, groupCaptions } from "./timing";
 import { buildBuiltinScript } from "../server/providers/script";
 import { nicheByKey } from "./niches";
-import { MIN_REEL_WORDS, scriptFromPrompt } from "./promptScript";
+import { scriptFromPrompt } from "./promptScript";
+import { usesPhotograph } from "../server/providers/image";
 import { countWords } from "./utils";
 
 describe("script schema", () => {
@@ -55,43 +56,68 @@ describe("builtin scripts", () => {
 });
 
 describe("prompt reels", () => {
-  it("speaks a written explanation instead of replacing it", () => {
+  it("speaks a written explanation once", () => {
     const prompt =
       "Black holes form when a massive star runs out of fuel. The core collapses under its own weight. Gravity becomes so strong that even light cannot escape. The edge of that darkness is called the event horizon.";
     const script = scriptFromPrompt(prompt);
     const spoken = script.scenes.map((scene) => scene.narration).join(" ");
     expect(spoken.toLowerCase()).toContain("event horizon");
     expect(spoken.toLowerCase()).not.toContain("the line to keep");
-    expect(countWords(spoken)).toBeGreaterThanOrEqual(MIN_REEL_WORDS);
+    expect(spoken.toLowerCase()).not.toMatch(/in other words|once more/);
+    expect(spoken.toLowerCase().split("event horizon").length - 1).toBe(1);
+    expect(spoken.toLowerCase().split("core collapses").length - 1).toBe(1);
     expect(script.scenes.length).toBeGreaterThanOrEqual(4);
-    expect(script.scenes.every((scene) => /cartoon/i.test(scene.imagePrompt))).toBe(true);
+    expect(script.scenes.every((scene) => usesPhotograph(scene.imagePrompt))).toBe(true);
+    expect(script.scenes.every((scene) => !/cartoon character/i.test(scene.imagePrompt))).toBe(true);
   });
 
   it("turns a short brief into a speakable reel", () => {
     const script = scriptFromPrompt("Why leaves change color in autumn");
     expect(generatedScriptSchema.safeParse(script).success).toBe(true);
     expect(script.scenes.length).toBeGreaterThanOrEqual(4);
-    expect(countWords(script.scenes.map((scene) => scene.narration).join(" "))).toBeGreaterThanOrEqual(MIN_REEL_WORDS);
     expect(countWords(script.scenes[0]!.narration)).toBeLessThanOrEqual(12);
     expect(script.scenes[0]!.narration.toLowerCase()).toContain("leaves");
-    expect(script.scenes[0]!.imagePrompt.toLowerCase()).toContain("cartoon");
+    expect(usesPhotograph(script.scenes[0]!.imagePrompt)).toBe(true);
+    expect(script.styleBible.toLowerCase()).not.toContain("cartoon character");
   });
 
-  it("prefers a drafted voiceover when it is long enough", () => {
+  it("prefers a drafted voiceover when the brief is short", () => {
     const script = scriptFromPrompt("How glass is made", {
       title: "How glass is made",
       scenes: [
         { narration: "Glass starts as sand.", search: "sand dune closeup" },
-        { narration: "The sand is heated until it melts.", search: "molten glass furnace" },
+        { narration: "The sand is heated until it melts. In other words, the sand is heated until it melts.", search: "molten glass furnace" },
         { narration: "Workers gather a glowing blob on a pipe.", search: "glassblower furnace" },
+        { narration: "Once more, workers gather a glowing blob on a pipe.", search: "glassblower furnace" },
         { narration: "A breath inflates it into a hollow form.", search: "glassblowing bubble" },
         { narration: "The shape cools into something you can hold.", search: "clear glass bottle" },
       ],
     });
+    const spoken = script.scenes.map((scene) => scene.narration).join(" ");
     expect(script.title).toBe("How glass is made");
-    expect(script.scenes.map((scene) => scene.narration).join(" ")).toContain("glowing blob");
+    expect(spoken).toContain("glowing blob");
+    expect(spoken.toLowerCase()).not.toMatch(/in other words|once more/);
+    expect(spoken.toLowerCase().split("glowing blob").length - 1).toBe(1);
     expect(script.scenes[1]?.imagePrompt.toLowerCase()).toContain("molten glass");
-    expect(script.scenes[1]?.imagePrompt.toLowerCase()).toContain("cartoon");
+    expect(usesPhotograph(script.scenes[1]!.imagePrompt)).toBe(true);
+  });
+
+  it("keeps a pasted voiceover instead of a repeated draft", () => {
+    const prompt =
+      "Konnex finds the hire. You direct the work. We handle payroll and HR. Agency data stays in the United States.";
+    const script = scriptFromPrompt(prompt, {
+      scenes: [
+        { narration: "Konnex finds the hire. In other words, Konnex finds the hire." },
+        { narration: "Once more, you direct the work." },
+        { narration: "You direct the work." },
+        { narration: "We handle payroll and HR." },
+        { narration: "Agency data stays in the United States." },
+      ],
+    });
+    const spoken = script.scenes.map((scene) => scene.narration).join(" ");
+    expect(spoken.toLowerCase()).not.toMatch(/in other words|once more/);
+    expect(spoken.toLowerCase().split("direct the work").length - 1).toBe(1);
+    expect(spoken).toContain("Agency data stays in the United States.");
   });
 });
 

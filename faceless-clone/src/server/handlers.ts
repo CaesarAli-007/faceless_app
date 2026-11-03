@@ -432,29 +432,30 @@ export async function createReel(req: Request) {
 }
 
 async function reelSeries() {
+  const music = await prisma.musicTrack.findUnique({ where: { key: "brilliant-symphony" } });
+  const musicTrackIds = JSON.stringify(music ? [music.id] : []);
   const existing = await prisma.series.findFirst({ where: { name: "Prompt reels", nicheKey: "custom" } });
   if (existing) {
     return prisma.series.update({
       where: { id: existing.id },
-      data: { durationMinSec: 60, durationMaxSec: 120, artStyleKey: "modern-cartoon" },
+      data: { durationMinSec: 40, durationMaxSec: 60, artStyleKey: "realism", musicTrackIds },
     });
   }
   const voice = (await prisma.voice.findUnique({ where: { id: "jonah" } })) ?? (await prisma.voice.findFirst({ where: { language: "en" } }));
   if (!voice) throw new Error("No voice is installed. Run npm run db:setup.");
-  const music = await prisma.musicTrack.findUnique({ where: { key: "quiet-before-storm" } });
   return prisma.series.create({
     data: {
       name: "Prompt reels",
       nicheKey: "custom",
-      customNichePrompt: "One minute reel from a single prompt",
+      customNichePrompt: "A professional video from a single prompt",
       language: "en",
       voiceId: voice.id,
-      musicTrackIds: JSON.stringify(music ? [music.id] : []),
-      artStyleKey: "modern-cartoon",
+      musicTrackIds,
+      artStyleKey: "realism",
       captionStyle: JSON.stringify(defaultCaptionStyle()),
       effects: "[]",
-      durationMinSec: 60,
-      durationMaxSec: 120,
+      durationMinSec: 40,
+      durationMaxSec: 60,
       timezone: "UTC",
       publishTimes: "[]",
       publishDays: "[]",

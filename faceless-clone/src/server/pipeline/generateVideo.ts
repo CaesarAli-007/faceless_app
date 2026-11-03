@@ -216,15 +216,6 @@ async function ensureVoice(video: Loaded, script: GeneratedScript, voicePath: st
     }
     durationSec = await probeDuration(voicePath);
   }
-  if (video.prompt && durationSec < 60 && durationSec > 15) {
-    const tempo = Math.max(0.5, durationSec / 62);
-    const slowed = path.join(path.dirname(voicePath), "voice-slow.mp3");
-    await changeTempo(voicePath, slowed, tempo);
-    await fs.copyFile(slowed, voicePath);
-    words = words.map((word) => ({ ...word, startMs: word.startMs / tempo, endMs: word.endMs / tempo }));
-    durationSec = await probeDuration(voicePath);
-    await videoLog(video.id, `Narration was stretched so the reel reaches ${durationSec.toFixed(0)} seconds.`);
-  }
   if (!video.prompt && durationSec > 90) {
     const tempo = durationSec / 88;
     const sped = path.join(path.dirname(voicePath), "voice-sped.mp3");

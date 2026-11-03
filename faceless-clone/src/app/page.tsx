@@ -76,7 +76,7 @@ export default function HomePage() {
           <div className="kicker">The prompt</div>
           <h1 className="display mt-2 text-5xl leading-none md:text-6xl">Explain the reel.</h1>
           <p className="mt-4 max-w-xl text-muted">
-            Write the idea, or paste the words you want spoken. You get a one-minute vertical video with a cartoon character, a voiceover, and captions.
+            Write the idea, or paste the words you want spoken. You get a vertical video with a voiceover, professional pictures, and captions. Each sentence is spoken once.
           </p>
           <label className="mt-6 block">
             <span className="sr-only">Prompt</span>

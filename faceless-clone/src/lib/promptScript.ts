@@ -1,8 +1,6 @@
 import { generatedScriptSchema, type GeneratedScript } from "./scriptSchema";
 import { countWords } from "./utils";
 
-export const MIN_REEL_WORDS = 155;
-
 export type PromptDraft = {
   title?: string;
   character?: string;
@@ -165,60 +163,66 @@ function tagsFrom(text: string) {
   return unique.slice(0, 6);
 }
 
-function imagePromptFor(search: string, narration: string, topic: string, character: string) {
+function imagePromptFor(search: string, narration: string, topic: string) {
   const action = tidy(search) || searchFromLine(narration, topic);
   const phrase = action.length >= 8 ? action : searchFromLine(`${action} ${narration}`, topic);
-  const who = character.trim() || `one friendly cartoon character explaining ${clipWords(topic, 6)}`;
-  const prompt = `${who}, ${phrase}, the same cartoon character, bold outlines, flat colors, full body, simple background, no text`;
-  return prompt.length >= 10 ? prompt : "one friendly cartoon character, full body, flat colors, no text";
+  const prompt = `Professional photograph of ${phrase}. Photorealistic workplace, natural light, real people in business attire, navy and red accents, vertical framing, no cartoon, no illustration, no text, no logos, no watermark`;
+  return prompt.length >= 10 ? prompt : "Professional photograph of a modern workplace, natural light, no cartoon, no text";
 }
 
-function stretchToMinute(scenes: { narration: string; search: string }[], _topic: string) {
-  const next = scenes.map((scene) => ({ narration: speakable(scene.narration), search: scene.search }));
-  const words = () => countWords(next.map((scene) => scene.narration).join(" "));
-  const restate = (narration: string) => {
-    const bare = narration.replace(/[.?!]+$/g, "").replace(/^In other words, /i, "");
-    const lower = bare.charAt(0).toLowerCase() + bare.slice(1);
-    return speakable(`${bare}. In other words, ${lower}`);
-  };
-  for (let index = 1; index < next.length && words() < MIN_REEL_WORDS; index += 1) {
-    next[index] = { ...next[index]!, narration: restate(next[index]!.narration) };
+function spokenOnce(narration: string) {
+  let line = tidy(narration);
+  line = line.split(/\.\s+In other words,\s+/i)[0] ?? line;
+  line = line.replace(/^(in other words|once more),\s+/i, "");
+  return speakable(line);
+}
+
+function narrationKey(narration: string) {
+  return spokenOnce(narration)
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function dedupeScenes(scenes: { narration: string; search: string }[]) {
+  const seen = new Set<string>();
+  const unique: { narration: string; search: string }[] = [];
+  for (const scene of scenes) {
+    const narration = spokenOnce(scene.narration);
+    const key = narrationKey(narration);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    unique.push({ narration, search: scene.search });
   }
-  const seeds = next.map((scene) => ({ ...scene }));
-  let beat = 0;
-  while (words() < MIN_REEL_WORDS && next.length < 12 && beat < 12) {
-    const source = seeds[beat % seeds.length]!;
-    const bare = source.narration.split(". In other words,")[0]!.replace(/[.?!]+$/g, "");
-    const lower = bare.charAt(0).toLowerCase() + bare.slice(1);
-    next.push({ narration: speakable(`Once more, ${lower}`), search: source.search });
-    beat += 1;
-  }
-  return next;
+  return unique;
 }
 
 export function scriptFromPrompt(prompt: string, draft?: PromptDraft): GeneratedScript {
   const clean = tidy(prompt);
   if (clean.length < 8) throw new Error("Describe the reel in at least a few words.");
-  const fromDraft = draftScenes(draft);
-  const spoken = chunkNarration(clean);
-  const base = fromDraft ?? (spoken.length >= 4 ? spoken.map((narration) => ({ narration, search: "" })) : explainBrief(clean));
+  const userLines = chunkNarration(clean);
+  const userScenes = dedupeScenes(
+    userLines.length >= 4 ? userLines.map((narration) => ({ narration, search: "" })) : explainBrief(clean),
+  );
+  const drafted = dedupeScenes(draftScenes(draft) ?? []);
+  const base = userLines.length >= 4 ? userScenes : drafted.length >= 4 ? drafted : userScenes;
+  const scenes = dedupeScenes(base);
+  if (scenes.length < 4) throw new Error("Describe the reel in a few full sentences.");
   const idea = stripLead(clean) || clean;
-  const character =
-    tidy(draft?.character ?? "").slice(0, 180) ||
-    `one friendly cartoon character with a simple costume that matches ${clipWords(idea, 6)}`;
-  const scenes = stretchToMinute(base, idea);
-  const titleSource = tidy(draft?.title ?? "") || scenes[0]?.narration.replace(/[.?!]+$/g, "") || idea;
+  const titleSource = (userLines.length >= 4 ? "" : tidy(draft?.title ?? "")) || scenes[0]?.narration.replace(/[.?!]+$/g, "") || idea;
   const title = clip(titleSource, 80);
-  const description = clip(clean.length >= 10 ? clean : `${clean} A one minute reel.`, 240);
+  const description = clip(clean.length >= 10 ? clean : `${clean} A short professional video.`, 240);
   const script: GeneratedScript = {
     topic: clip(idea, 140),
     title: title.length >= 3 ? title : clip(idea, 80),
     description,
     hashtags: tagsFrom(`${idea} ${scenes.map((scene) => scene.narration).join(" ")}`),
-    styleBible: `The same cartoon character in every scene: ${character}. Bold outlines, flat colors, full body, simple background. No photographs, no text, no logos.`,
+    styleBible:
+      "Realistic professional photographs in every scene. Modern workplace, natural light, real people, navy and red accents. No cartoons, no illustrations, no text, no logos.",
     scenes: scenes.map((scene) => ({
       narration: scene.narration,
-      imagePrompt: imagePromptFor(scene.search, scene.narration, idea, character),
+      imagePrompt: imagePromptFor(scene.search, scene.narration, idea),
     })),
   };
   const parsed = generatedScriptSchema.safeParse(script);

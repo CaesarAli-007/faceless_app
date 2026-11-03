@@ -450,11 +450,11 @@ export async function rewriteImagePrompt(prompt: string): Promise<string> {
 }
 
 const PROMPT_WRITER = `Return JSON only, no markdown:
-{"title":"max 70 chars","character":"one cartoon character with colors and a costume tied to the topic","scenes":[{"narration":"one spoken sentence","action":"what that same character is doing"}]}
-Write 10 scenes and about 180 spoken words, enough to last at least 60 seconds aloud.
-The first sentence is at most 12 words.
-Use the same character in every scene. Actions are cartoon moments, not photographs.
-If the user already wrote several sentences, keep their facts and do not invent new ones.`;
+{"title":"max 70 chars","character":"a real workplace, not a cartoon","scenes":[{"narration":"one spoken sentence","action":"the realistic business moment on screen"}]}
+Write 6 to 10 scenes. The first sentence is at most 12 words.
+Say each fact once. Do not repeat a sentence, paraphrase it, or write "in other words" or "once more".
+Visuals are realistic photographs of people at work. No cartoons, no illustrated characters, no logos, no words in the picture.
+If the user already wrote several sentences, keep those sentences and do not add new claims.`;
 
 async function promptWriter(prompt: string): Promise<string> {
   let lastError = "The writer was unavailable.";
@@ -497,6 +497,8 @@ async function promptWriter(prompt: string): Promise<string> {
 }
 
 export async function generatePromptScript(prompt: string): Promise<{ script: GeneratedScript; source: "model" | "local" }> {
+  const written = prompt.split(/(?<=[.!?])\s+/).filter((sentence) => sentence.trim().length > 0);
+  if (written.length >= 4) return { script: scriptFromPrompt(prompt), source: "local" };
   try {
     const text = await promptWriter(prompt);
     const draft = extractJson(text) as PromptDraft;
