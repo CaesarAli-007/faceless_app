@@ -43,6 +43,11 @@ class EdgeRejected extends Error {
   }
 }
 
+export function edgeTimeoutMs(text: string) {
+  const words = text.split(/\s+/).filter(Boolean).length;
+  return Math.min(240_000, Math.max(45_000, 20_000 + words * 800));
+}
+
 function speakOnce(text: string, voice: string, speed: number) {
   const rate = `${speed >= 1 ? "+" : ""}${Math.round((speed - 1) * 100)}%`;
   const connectionId = crypto.randomUUID().replace(/-/g, "");
@@ -67,17 +72,18 @@ function speakOnce(text: string, voice: string, speed: number) {
     const chunks: Buffer[] = [];
     const wordTimings: WordTiming[] = [];
     let settled = false;
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      ws.close();
-      reject(new Error("Edge TTS timed out."));
-    }, 60_000);
+    let idle: NodeJS.Timeout;
+    const timer = setTimeout(() => fail(new Error("Edge TTS timed out.")), edgeTimeoutMs(spoken));
+    const armIdle = () => {
+      clearTimeout(idle);
+      idle = setTimeout(() => fail(new Error("Edge TTS stopped responding.")), 20_000);
+    };
 
     const finish = () => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      clearTimeout(idle);
       ws.close();
       if (!chunks.length) {
         reject(new Error("Edge TTS returned no audio."));
@@ -90,11 +96,13 @@ function speakOnce(text: string, voice: string, speed: number) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      clearTimeout(idle);
       ws.close();
       reject(error);
     };
 
     ws.on("open", () => {
+      armIdle();
       const stamp = edgeTimestamp();
       ws.send(
         `X-Timestamp:${stamp}\r\nContent-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n{"context":{"synthesis":{"audio":{"metadataoptions":{"sentenceBoundaryEnabled":"false","wordBoundaryEnabled":"true"},"outputFormat":"audio-24khz-48kbitrate-mono-mp3"}}}}\r\n`,
@@ -104,6 +112,7 @@ function speakOnce(text: string, voice: string, speed: number) {
     });
 
     ws.on("message", (data, isBinary) => {
+      armIdle();
       const buf = Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
       if (isBinary || (buf.length >= 2 && buf[0] === 0 && buf[1]! > 0 && !buf.subarray(0, 80).toString("utf8").includes("Path:"))) {
         if (buf.length < 2) return;
@@ -150,19 +159,25 @@ function speakOnce(text: string, voice: string, speed: number) {
       fail(error);
     });
     ws.on("close", () => {
+      if (settled) return;
       if (chunks.length) finish();
+      else fail(new Error("Edge TTS closed before sending audio."));
     });
   });
 }
 
-export function speakWithEdge(text: string, voice: string, speed = 1) {
-  return speakOnce(text, voice, speed).catch(async (error: unknown) => {
-    if (error instanceof EdgeRejected && error.serverDate) {
-      noteEdgeClock(error.serverDate);
-      return speakOnce(text, voice, speed);
+export async function speakWithEdge(text: string, voice: string, speed = 1) {
+  let last: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await speakOnce(text, voice, speed);
+    } catch (error) {
+      last = error;
+      if (error instanceof EdgeRejected && error.serverDate) noteEdgeClock(error.serverDate);
+      if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 600));
     }
-    throw error;
-  });
+  }
+  throw last instanceof Error ? last : new Error("Edge TTS failed.");
 }
 
 async function kokoro(text: string, gender: string) {

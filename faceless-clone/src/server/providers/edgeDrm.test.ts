@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { edgeTimeoutMs } from "./tts";
 import { generateSecMsGecV2 } from "./edgeDrm";
 
 describe("edge Sec-MS-GEC v2", () => {
@@ -12,5 +13,13 @@ describe("edge Sec-MS-GEC v2", () => {
     expect(generateSecMsGecV2(1761173800.5)).toBe(
       "0DAE1C084292CCA8-D085A63716552C7C3A497C4FAFE035E87978EAAD23DF382E9F5D88101F510ABB",
     );
+  });
+});
+
+describe("edge timeout", () => {
+  it("gives a long script more than a minute", () => {
+    expect(edgeTimeoutMs("one two three")).toBe(45_000);
+    expect(edgeTimeoutMs(Array.from({ length: 270 }, () => "word").join(" "))).toBe(236_000);
+    expect(edgeTimeoutMs(Array.from({ length: 400 }, () => "word").join(" "))).toBe(240_000);
   });
 });
